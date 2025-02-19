@@ -3,6 +3,12 @@
 name: CI - Release
 
 on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        required: true
+        type: string
+        default: latest
   workflow_call:
     inputs:
       ref:
@@ -21,47 +27,44 @@ jobs:
       run:
         shell: bash
     steps:
-      - name: Create Check
-        uses: LouisBrunner/checks-action@v1.3.1
-        id: check
-
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          status: in_progress
-          name: Lint All
-          sha: ${{ inputs.check-sha }}
-          # XXX: this does not work when using the default GITHUB_TOKEN.
-          # Instead we post the main job url to the PR as a comment which
-          # will link to all the other checks. To work around this we would
-          # need to create a GitHub that would create on-demand tokens.
-          # https://github.com/LouisBrunner/checks-action/issues/18
-          # details_url:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref }}
       - name: Setup Git User
         run: |
           git config --global user.email "npm-cli+bot@github.com"
           git config --global user.name "npm CLI robot"
-      - name: Setup Node
-        uses: actions/setup-node@v3
+      - name: Create Check
+        id: create-check
+        if: ${{ inputs.check-sha }}
+        uses: ./.github/actions/create-check
         with:
-          node-version: 18.x
+          name: "Lint All"
+          token: ${{ secrets.GITHUB_TOKEN }}
+          sha: ${{ inputs.check-sha }}
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        id: node
+        with:
+          node-version: 22.x
+          check-latest: contains('22.x', '.x')
           cache: npm
+      - name: Check Git Status
+        run: node scripts/git-dirty.js
       - name: Reset Deps
-        run: node . run resetdeps
+        run: node scripts/resetdeps.js
       - name: Lint
         run: node . run lint --ignore-scripts -ws -iwr --if-present
       - name: Post Lint
         run: node . run postlint --ignore-scripts -ws -iwr --if-present
       - name: Conclude Check
-        uses: LouisBrunner/checks-action@v1.3.1
-        if: always()
+        uses: LouisBrunner/checks-action@v1.6.0
+        if: steps.create-check.outputs.check-id && always()
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           conclusion: ${{ job.status }}
-          check_id: ${{ steps.check.outputs.check_id }}
+          check_id: ${{ steps.create-check.outputs.check-id }}
 
   test-all:
     name: Test All - ${{ matrix.platform.name }} - ${{ matrix.node-version }}
@@ -76,73 +79,78 @@ jobs:
           - name: macOS
             os: macos-latest
             shell: bash
+          - name: macOS
+            os: macos-13
+            shell: bash
           - name: Windows
             os: windows-latest
             shell: cmd
         node-version:
-          - 14.17.0
-          - 14.x
-          - 16.13.0
-          - 16.x
-          - 18.0.0
-          - 18.x
+          - 20.17.0
+          - 20.x
+          - 22.9.0
+          - 22.x
+        exclude:
+          - platform: { name: macOS, os: macos-13, shell: bash }
+            node-version: 20.17.0
+          - platform: { name: macOS, os: macos-13, shell: bash }
+            node-version: 20.x
+          - platform: { name: macOS, os: macos-13, shell: bash }
+            node-version: 22.9.0
+          - platform: { name: macOS, os: macos-13, shell: bash }
+            node-version: 22.x
     runs-on: ${{ matrix.platform.os }}
     defaults:
       run:
         shell: ${{ matrix.platform.shell }}
     steps:
-      - name: Create Check
-        uses: LouisBrunner/checks-action@v1.3.1
-        id: check
-
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          status: in_progress
-          name: Test All - ${{ matrix.platform.name }} - ${{ matrix.node-version }}
-          sha: ${{ inputs.check-sha }}
-          # XXX: this does not work when using the default GITHUB_TOKEN.
-          # Instead we post the main job url to the PR as a comment which
-          # will link to all the other checks. To work around this we would
-          # need to create a GitHub that would create on-demand tokens.
-          # https://github.com/LouisBrunner/checks-action/issues/18
-          # details_url:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref }}
       - name: Setup Git User
         run: |
           git config --global user.email "npm-cli+bot@github.com"
           git config --global user.name "npm CLI robot"
+      - name: Create Check
+        id: create-check
+        if: ${{ inputs.check-sha }}
+        uses: ./.github/actions/create-check
+        with:
+          name: "Test All - ${{ matrix.platform.name }} - ${{ matrix.node-version }}"
+          token: ${{ secrets.GITHUB_TOKEN }}
+          sha: ${{ inputs.check-sha }}
       - name: Setup Node
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
+        id: node
         with:
           node-version: ${{ matrix.node-version }}
+          check-latest: contains(matrix.node-version, '.x')
           cache: npm
+      - name: Check Git Status
+        run: node scripts/git-dirty.js
       - name: Reset Deps
-        run: node . run resetdeps
-      - name: Link
-        if: matrix
-        run: node . link -f --ignore-scripts
-      - name: Rebuild cmark-gfm
-        run: node . rebuild cmark-gfm
+        run: node scripts/resetdeps.js
       - name: Add Problem Matcher
         run: echo "::add-matcher::.github/matchers/tap.json"
       - name: Test
         run: node . test --ignore-scripts -ws -iwr --if-present
       - name: Check Git Status
-        if: matrix && matrix.platform.os != 'windows-latest'
         run: node scripts/git-dirty.js
       - name: Conclude Check
-        uses: LouisBrunner/checks-action@v1.3.1
-        if: always()
+        uses: LouisBrunner/checks-action@v1.6.0
+        if: steps.create-check.outputs.check-id && always()
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           conclusion: ${{ job.status }}
-          check_id: ${{ steps.check.outputs.check_id }}
+          check_id: ${{ steps.create-check.outputs.check-id }}
 
-  smoke-publish:
-    name: Smoke Publish - ${{ matrix.platform.name }} - ${{ matrix.node-version }}
+  smoke-tests:
+    # This cant be tested on Windows because our node_modules directory	
+    # checks in symlinks which are not supported there. This should be	
+    # fixed somehow, because this means some forms of local development	
+    # are likely broken on Windows as well.	
+    name: Smoke Tests - ${{ matrix.platform.name }} - ${{ matrix.node-version }}
     if: github.repository_owner == 'npm'
     strategy:
       fail-fast: false
@@ -151,72 +159,110 @@ jobs:
           - name: Linux
             os: ubuntu-latest
             shell: bash
-          - name: macOS
-            os: macos-latest
-            shell: bash
         node-version:
-          - 14.17.0
-          - 14.x
-          - 16.13.0
-          - 16.x
-          - 18.0.0
-          - 18.x
+          - 20.17.0
+          - 20.x
+          - 22.9.0
+          - 22.x
     runs-on: ${{ matrix.platform.os }}
     defaults:
       run:
         shell: ${{ matrix.platform.shell }}
     steps:
-      - name: Create Check
-        uses: LouisBrunner/checks-action@v1.3.1
-        id: check
-
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          status: in_progress
-          name: Smoke Publish - ${{ matrix.platform.name }} - ${{ matrix.node-version }}
-          sha: ${{ inputs.check-sha }}
-          # XXX: this does not work when using the default GITHUB_TOKEN.
-          # Instead we post the main job url to the PR as a comment which
-          # will link to all the other checks. To work around this we would
-          # need to create a GitHub that would create on-demand tokens.
-          # https://github.com/LouisBrunner/checks-action/issues/18
-          # details_url:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref }}
       - name: Setup Git User
         run: |
           git config --global user.email "npm-cli+bot@github.com"
           git config --global user.name "npm CLI robot"
+      - name: Create Check
+        id: create-check
+        if: ${{ inputs.check-sha }}
+        uses: ./.github/actions/create-check
+        with:
+          name: "Smoke Tests - ${{ matrix.platform.name }} - ${{ matrix.node-version }}"
+          token: ${{ secrets.GITHUB_TOKEN }}
+          sha: ${{ inputs.check-sha }}
       - name: Setup Node
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
+        id: node
         with:
           node-version: ${{ matrix.node-version }}
+          check-latest: contains(matrix.node-version, '.x')
           cache: npm
+      - name: Check Git Status
+        run: node scripts/git-dirty.js
       - name: Reset Deps
-        run: node . run resetdeps
-      - name: Pack
-        run: |
-          NPM_VERSION="$(node . --version)-$GITHUB_SHA.0"
-          node . version $NPM_VERSION --ignore-scripts
-          node . run resetdeps
-          git clean -fd
-          node . ls --omit=dev >/dev/null
-          node . prune --omit=dev --no-save --no-audit --no-fund
-          node scripts/git-dirty.js
-          node . pack --pack-destination=$RUNNER_TEMP
-          node . install -g $RUNNER_TEMP/npm-$NPM_VERSION.tgz
-          node . install -w smoke-tests --ignore-scripts --no-audit --no-fund
-          rm -rf {lib,bin,index.js}
-          # this one should be npm since we explicitly installed our packed
-          # tarball globally and the next test will make sure our the new
-          # globally installed version contains the git sha
-          SMOKE_PUBLISH_NPM=1 npm test -w smoke-tests --ignore-scripts
+        run: node scripts/resetdeps.js
+      - name: Smoke Tests
+        run: ./scripts/smoke-tests.sh
       - name: Conclude Check
-        uses: LouisBrunner/checks-action@v1.3.1
-        if: always()
+        uses: LouisBrunner/checks-action@v1.6.0
+        if: steps.create-check.outputs.check-id && always()
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           conclusion: ${{ job.status }}
-          check_id: ${{ steps.check.outputs.check_id }}
+          check_id: ${{ steps.create-check.outputs.check-id }}
+
+  publish-dryrun:
+    # This cant be tested on Windows because our node_modules directory	
+    # checks in symlinks which are not supported there. This should be	
+    # fixed somehow, because this means some forms of local development	
+    # are likely broken on Windows as well.	
+    name: Publish Dry-Run - ${{ matrix.platform.name }} - ${{ matrix.node-version }}
+    if: github.repository_owner == 'npm'
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - name: Linux
+            os: ubuntu-latest
+            shell: bash
+        node-version:
+          - 20.17.0
+          - 20.x
+          - 22.9.0
+          - 22.x
+    runs-on: ${{ matrix.platform.os }}
+    defaults:
+      run:
+        shell: ${{ matrix.platform.shell }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - name: Setup Git User
+        run: |
+          git config --global user.email "npm-cli+bot@github.com"
+          git config --global user.name "npm CLI robot"
+      - name: Create Check
+        id: create-check
+        if: ${{ inputs.check-sha }}
+        uses: ./.github/actions/create-check
+        with:
+          name: "Publish Dry-Run - ${{ matrix.platform.name }} - ${{ matrix.node-version }}"
+          token: ${{ secrets.GITHUB_TOKEN }}
+          sha: ${{ inputs.check-sha }}
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        id: node
+        with:
+          node-version: ${{ matrix.node-version }}
+          check-latest: contains(matrix.node-version, '.x')
+          cache: npm
+      - name: Check Git Status
+        run: node scripts/git-dirty.js
+      - name: Reset Deps
+        run: node scripts/resetdeps.js
+      - name: Publish Dry-Run
+        run: node ./scripts/publish.js --pack-destination=$RUNNER_TEMP --smoke-publish=true
+      - name: Conclude Check
+        uses: LouisBrunner/checks-action@v1.6.0
+        if: steps.create-check.outputs.check-id && always()
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          conclusion: ${{ job.status }}
+          check_id: ${{ steps.create-check.outputs.check-id }}
